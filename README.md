@@ -1,16 +1,27 @@
-# Smart Data Report Project（智能数据报表）— 安装、部署与使用说明
+# Smart Data Report（智能数据报表）
 
-本仓库可公开用于简历或作品集：Flask + pandas + Plotly 的拖拽式 Web 报表看板，支持上传 Excel/CSV、会话持久化、看板布局、导出与简易数据质检。详细功能与接口见下文目录。
+基于 **Flask + pandas + Plotly** 的 Web 智能报表看板：上传 Excel/CSV、拖拽图表、会话持久化、多格式导出与简易数据质检。个人学习 / 作品集项目，侧重完整数据链路而非商业级多租户能力。
 
-**公开到 GitHub 前请确认**：勿提交 `.env`、`data/data_store.json`、用户上传文件、含姓名的交作业压缩包（见仓库根目录 `.gitignore`）。生产或公网部署前请设置 **`FLASK_SECRET_KEY`**（见下文「生产环境部署要点」）。
+![主看板概览](docs/thesis_figures/fig_4_2_dashboard_overview.png)
 
-**关于交作业用的 `.zip`**：只改压缩包外层文件名**不会**改变解压后的顶层文件夹名；若压缩包内曾带有姓名或误打入 `__pycache__`，应**删掉旧包、整理好文件夹后重新压缩**。推送到 GitHub 时无需上传该 zip，克隆源码即可。
+## 快速开始
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+python app.py
+```
+
+浏览器访问 **http://127.0.0.1:5000/**。侧栏可生成内置演示数据，无需自备 Excel。
+
+**安全提示**：勿将 `.env`、`data/data_store.json` 或用户上传文件提交到仓库（见 `.gitignore`）。公网部署前请设置 **`FLASK_SECRET_KEY`**（见 [生产环境部署要点](#5-生产环境部署要点)）。
 
 ---
 
-本文档说明如何在本地或服务器上安装、启动与使用 **Smart Data Report Project**（中文可称**智能数据报表**：Flask 后端 + 单页看板前端）。功能定位上接近市面常见「接数据再拼装图表与表格」的报表 / BI 工具用法（如 FineReport、Power BI 等），本仓库为课程/轻量实现，不对比商业产品功能。
+下文为安装、部署与使用说明。功能上接近常见「接表 → 出图 → 摆看板」的报表 / BI 工具流程，实现为单进程、轻量版本。
 
-**路径约定**：下文用 **`<Project_Root>`** 表示本仓库在磁盘上的根目录，即与 `app.py`、`requirements.txt` 处于同一层的文件夹。文中出现的 `uploads/`、`data/`、`fonts/`、`static/` 等均为相对于 `<Project_Root>` 的路径。在终端中请先切换到 `<Project_Root>`（各系统下 `cd` 的写法自行替换为实际路径），再执行安装与启动命令。
+**路径约定**：**`<Project_Root>`** 指与 `app.py`、`requirements.txt` 同级的仓库根目录。`uploads/`、`data/`、`static/` 等路径均相对该目录。安装与启动命令请在 `<Project_Root>` 下执行。
 
 ---
 
@@ -30,7 +41,7 @@
 
 ## 1. 项目简介
 
-**Smart Data Report Project（智能数据报表）** 是一款 **Web 智能报表 / BI 看板** 应用：支持上传 Excel/CSV、**侧栏一键生成内置测试数据**（与 `generate_mock_data` / `TestData` 同分布）、拖拽生成图表、看板 Dock 布局、日期与维度筛选、参考表关联、智能多级表、模板载入、数据导出与异常检测等；目标是在浏览器里较快**组合**出常用分析视图（与重型报表平台相比实现从简）。
+**Smart Data Report** 是一款 **Web 智能报表 / BI 看板** 应用：支持上传 Excel/CSV、侧栏一键生成内置演示数据、拖拽生成图表、看板 Dock 布局、日期与维度筛选、参考表关联、智能多级表、模板载入、数据导出与异常检测等；目标是在浏览器里较快组合出常用分析视图。
 
 **技术栈（与 `requirements.txt` 一致）**
 
@@ -71,7 +82,7 @@
 
 ### 3.2 推荐方式：使用虚拟环境（venv）
 
-依赖与项目隔离，避免污染系统或其它项目，**推荐**日常使用与课程作业采用本方式。
+依赖与项目隔离，避免污染系统或其它项目，**推荐**日常开发与部署采用本方式。
 
 **Windows（PowerShell）**
 
