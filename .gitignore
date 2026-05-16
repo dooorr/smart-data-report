@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+.venv/
+venv/
+env/
+
+# 环境变量（勿提交密钥）
+.env
+.env.*
+
+# 运行时与会话数据（克隆后由程序生成）
+data/data_store.json
+
+# 本地上传目录内容（勿提交用户文件）
+uploads/*
+!uploads/.gitkeep
+
+# 操作系统
+.DS_Store
+Thumbs.db
+
+# Pandoc 本地生成的 Word（个人存档，勿提交）
+23012513.docx
+thesis.docx
+
+# 交作业用压缩包（常含姓名；勿进公开仓库）
+*.zip
+
+# IDE（可选）
+.idea/
+.vscode/
+*.code-workspace
+
+# 论文与个人作业（不公开）
+*论文*.docx
+23012513*.docx
+thesis_draft.md
+docs/thesis_pandoc_reference.docx
+TestData/
+scripts/patch_thesis_reference_docx.py
+scripts/render_thesis_mermaid.py
