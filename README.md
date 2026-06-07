@@ -15,6 +15,15 @@ python app.py
 
 浏览器访问 **http://127.0.0.1:5000/**。侧栏可生成内置演示数据，无需自备 Excel。
 
+### 运行自动化测试（pytest）
+
+```powershell
+pip install -r requirements.txt
+pytest tests/ -v
+```
+
+测试使用 Flask 内置 `test_client`，覆盖上传校验、演示数据生成、会话恢复、异常检测与会话清理等 **15+** 用例；`uploads/` 与 `data_store.json` 会写入临时目录，不污染本地开发数据。
+
 **安全提示**：勿将 `.env`、`data/data_store.json` 或用户上传文件提交到仓库（见 `.gitignore`）。公网部署前请设置 **`FLASK_SECRET_KEY`**（见 [生产环境部署要点](#5-生产环境部署要点)）。
 
 ---
