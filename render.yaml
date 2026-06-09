@@ -1,0 +1,15 @@
+# Render 一键部署：https://render.com → New → Blueprint → 连接本仓库
+# 免费套餐会送 https://你的服务名.onrender.com，无需购买域名
+services:
+  - type: web
+    name: smart-data-report
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 2 --threads 4 --timeout 120
+    healthCheckPath: /health
+    envVars:
+      - key: FLASK_SECRET_KEY
+        generateValue: true
+      - key: PYTHON_VERSION
+        value: "3.11.9"

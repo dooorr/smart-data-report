@@ -53,6 +53,18 @@ app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-secret-key-change-me")
 app.config["UPLOAD_FOLDER"] = "uploads"
 os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
 
+_IS_PRODUCTION = (
+    os.environ.get("RENDER") == "true"
+    or os.environ.get("RAILWAY_ENVIRONMENT") is not None
+)
+if _IS_PRODUCTION:
+    from werkzeug.middleware.proxy_fix import ProxyFix
+
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+    app.config["SESSION_COOKIE_SECURE"] = True
+    app.config["SESSION_COOKIE_HTTPONLY"] = True
+    app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+
 # ---------- User Auth Setup (Flask-Login + SQLite) ----------
 login_manager = LoginManager()
 login_manager.init_app(app)
@@ -584,6 +596,12 @@ def get_font(size):
         return ImageFont.truetype("simhei.ttf", size)
     except:
         return ImageFont.load_default()
+
+@app.route("/health")
+def health():
+    """部署平台健康检查（Render / Railway 等）。"""
+    return jsonify({"status": "ok"}), 200
+
 
 @app.route('/')
 def index():
@@ -1870,4 +1888,5 @@ load_global_data_store()
 
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=not _IS_PRODUCTION)

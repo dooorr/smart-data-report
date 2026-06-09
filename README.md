@@ -26,6 +26,10 @@ pytest tests/ -v
 
 **安全提示**：勿将 `.env`、`data/data_store.json` 或用户上传文件提交到仓库（见 `.gitignore`）。公网部署前请设置 **`FLASK_SECRET_KEY`**（见 [生产环境部署要点](#5-生产环境部署要点)）。
 
+### 公网部署（无需购买域名）
+
+平台会赠送免费 HTTPS 子域名（如 `xxx.onrender.com`）。完整步骤见 **[docs/DEPLOY.md](docs/DEPLOY.md)**（推荐 Render 免费套餐，约 10 分钟）。
+
 ---
 
 下文为安装、部署与使用说明。功能上接近常见「接表 → 出图 → 摆看板」的报表 / BI 工具流程，实现为单进程、轻量版本。
