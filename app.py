@@ -1,6 +1,9 @@
-from flask import Flask, render_template, request, jsonify, session, send_file
+from flask import Flask, render_template, request, jsonify, session, send_file, redirect, url_for
 from flask_cors import CORS
+from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from werkzeug.exceptions import HTTPException
+from werkzeug.security import generate_password_hash, check_password_hash
+import sqlite3
 import io
 import json
 import numpy as np
@@ -49,6 +52,58 @@ REPORT_TEMPLATES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-secret-key-change-me")
 app.config["UPLOAD_FOLDER"] = "uploads"
 os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
+
+# ---------- User Auth Setup (Flask-Login + SQLite) ----------
+login_manager = LoginManager()
+login_manager.init_app(app)
+login_manager.login_view = "login_page"
+
+DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "users.db")
+
+def init_user_db():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT UNIQUE NOT NULL,
+        password_hash TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )''')
+    conn.commit()
+    conn.close()
+
+init_user_db()
+
+class User(UserMixin):
+    def __init__(self, id, username):
+        self.id = id
+        self.username = username
+
+    @staticmethod
+    def get(user_id):
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("SELECT id, username FROM users WHERE id=?", (user_id,))
+        row = c.fetchone()
+        conn.close()
+        if row:
+            return User(row[0], row[1])
+        return None
+
+    @staticmethod
+    def find_by_username(username):
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("SELECT id, username FROM users WHERE username=?", (username,))
+        row = c.fetchone()
+        conn.close()
+        if row:
+            return User(row[0], row[1])
+        return None
+
+@login_manager.user_loader
+def load_user(user_id):
+    return User.get(user_id)
 
 
 def json_error(msg, code=500):
@@ -186,6 +241,52 @@ _PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 DATA_STORE_DIR = os.path.join(_PROJECT_ROOT, "data")
 DATA_STORE_FILE = os.path.join(DATA_STORE_DIR, "data_store.json")
 
+# ---------- Per-User Data Isolation (必须在 DATA_STORE_DIR 之后定义) ----------
+USER_DATA_DIR = os.path.join(DATA_STORE_DIR, "users")
+os.makedirs(USER_DATA_DIR, exist_ok=True)
+
+def get_current_user_data_file():
+    """返回当前登录用户的独立 data_store 文件路径；未登录时返回 None（启动时不加载任何用户数据）。"""
+    try:
+        if current_user and current_user.is_authenticated:
+            return os.path.join(USER_DATA_DIR, f"user_{current_user.id}_store.json")
+    except Exception:
+        pass
+    return None
+
+def _save_user_data_store(user_file: str, payload: dict):
+    """保存到指定用户的 JSON 文件。"""
+    try:
+        os.makedirs(os.path.dirname(user_file), exist_ok=True)
+        with open(user_file, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2, allow_nan=False)
+    except Exception as e:
+        print(f"[ERROR] 保存用户数据失败 {user_file}: {e}")
+
+def _load_user_data_store(user_file: str):
+    """从用户文件加载到 GLOBAL_DATA / dashboard_state。"""
+    if not os.path.isfile(user_file):
+        return
+    try:
+        with open(user_file, "r", encoding="utf-8") as f:
+            stored = json.load(f)
+        if not isinstance(stored, dict):
+            return
+        charts = stored.pop("dashboard_charts", None)
+        stored = clean_special_chars(stored)
+        GLOBAL_DATA.clear()
+        for key in _DATA_STORE_KEYS:
+            if key in stored:
+                GLOBAL_DATA[key] = stored[key]
+        if isinstance(charts, list):
+            dashboard_state["charts"] = charts
+        else:
+            dashboard_state["charts"] = []
+        print(f"[INFO] 已加载用户数据: {os.path.basename(user_file)}")
+    except Exception as e:
+        print(f"[ERROR] 加载用户数据失败: {e}")
+
+
 # 与 Smart Report 一致：仅持久化这些键，避免混入临时字段
 _DATA_STORE_KEYS = (
     "data",
@@ -292,9 +393,11 @@ def _sanitize_for_json(obj: Any) -> Any:
 
 
 def save_global_data_store():
-    """将 GLOBAL_DATA 与仪表盘图表列表写入 data_store.json。"""
+    """将 GLOBAL_DATA 与仪表盘图表列表写入当前用户的独立 JSON 文件。未登录时跳过保存。"""
+    user_file = get_current_user_data_file()
+    if not user_file:
+        return
     try:
-        os.makedirs(DATA_STORE_DIR, exist_ok=True)
         save_data: Dict[str, Any] = {}
         for key in _DATA_STORE_KEYS:
             if key not in GLOBAL_DATA:
@@ -307,20 +410,21 @@ def save_global_data_store():
         save_data["dashboard_charts"] = copy.deepcopy(dashboard_state.get("charts", []))
         save_data = _sanitize_for_json(save_data)
         save_data = clean_special_chars(save_data)
-        with open(DATA_STORE_FILE, "w", encoding="utf-8") as f:
-            json.dump(save_data, f, ensure_ascii=False, indent=2, allow_nan=False)
-        print("[INFO] GLOBAL_DATA 已保存到 data_store.json")
+        _save_user_data_store(user_file, save_data)
+        print(f"[INFO] 已保存到用户数据文件: {os.path.basename(user_file)}")
     except Exception as e:
-        print(f"[ERROR] 保存 data_store.json 失败: {e}")
+        print(f"[ERROR] 保存用户数据失败: {e}")
         traceback.print_exc()
 
 
 def load_global_data_store():
-    """启动时从 data_store.json 恢复 GLOBAL_DATA 与 dashboard_state。"""
-    if not os.path.isfile(DATA_STORE_FILE):
+    """登录后加载当前用户的独立数据文件。启动时无用户登录则跳过。"""
+    user_file = get_current_user_data_file()
+    if not user_file or not os.path.isfile(user_file):
+        # 启动时或未登录：不清空 GLOBAL_DATA，保持干净状态
         return
     try:
-        with open(DATA_STORE_FILE, "r", encoding="utf-8") as f:
+        with open(user_file, "r", encoding="utf-8") as f:
             stored = json.load(f)
         if not isinstance(stored, dict):
             return
@@ -336,7 +440,7 @@ def load_global_data_store():
         else:
             dashboard_state["charts"] = []
         fn = GLOBAL_DATA.get("filename")
-        print(f"[INFO] 已从 data_store.json 恢复 GLOBAL_DATA: {fn!r}，图表数: {len(dashboard_state['charts'])}")
+        print(f"[INFO] 已从用户文件恢复: {os.path.basename(user_file)}，文件: {fn!r}")
         rows = GLOBAL_DATA.get("data")
         if rows and isinstance(rows, list) and len(rows) > 0:
             df = pd.DataFrame(rows)
@@ -347,13 +451,8 @@ def load_global_data_store():
                 if not has_persisted_mapping:
                     sync_global_column_mapping(df)
     except Exception as e:
-        print(f"[ERROR] 加载 data_store.json 失败: {e}")
+        print(f"[ERROR] 加载用户数据失败: {e}")
         traceback.print_exc()
-        try:
-            os.remove(DATA_STORE_FILE)
-            print("[INFO] 已删除损坏的 data_store.json")
-        except OSError:
-            pass
 
 
 def _resolve_template_json_path(template_id: str):
@@ -488,9 +587,148 @@ def get_font(size):
 
 @app.route('/')
 def index():
+    if not current_user.is_authenticated:
+        return redirect(url_for('login_page'))
     return render_template('index.html')
 
+@app.route('/login', methods=['GET'])
+def login_page():
+    if os.path.exists(os.path.join('templates', 'login.html')):
+        return render_template('login.html')
+    # 内联登录页（JS fetch + 成功跳转）
+    return '''
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>登录 - Smart Data Report</title>
+  <style>body{font-family:sans-serif;margin:40px}input,button{padding:8px;margin:4px}</style>
+</head>
+<body>
+  <h2>登录</h2>
+  <form id="loginForm">
+    <input name="username" placeholder="用户名" required><br>
+    <input type="password" name="password" placeholder="密码" required><br>
+    <button type="submit">登录</button>
+  </form>
+  <p id="msg" style="color:red"></p>
+  <p>没有账号？<a href="/register">注册</a></p>
+
+  <script>
+    document.getElementById('loginForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const res = await fetch('/api/login', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (data.status === 'success') {
+        window.location.href = '/';
+      } else {
+        document.getElementById('msg').textContent = data.msg || '登录失败';
+      }
+    });
+  </script>
+</body>
+</html>
+    '''
+
+@app.route('/register', methods=['GET'])
+def register_page():
+    return '''
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>注册 - Smart Data Report</title>
+  <style>body{font-family:sans-serif;margin:40px}input,button{padding:8px;margin:4px}</style>
+</head>
+<body>
+  <h2>注册</h2>
+  <form id="regForm">
+    <input name="username" placeholder="用户名" required><br>
+    <input type="password" name="password" placeholder="密码（至少6位）" required><br>
+    <button type="submit">注册</button>
+  </form>
+  <p id="msg" style="color:red"></p>
+  <p>已有账号？<a href="/login">登录</a></p>
+
+  <script>
+    document.getElementById('regForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const res = await fetch('/api/register', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (data.status === 'success') {
+        window.location.href = '/';
+      } else {
+        document.getElementById('msg').textContent = data.msg || '注册失败';
+      }
+    });
+  </script>
+</body>
+</html>
+    '''
+
+@app.route('/api/register', methods=['POST'])
+def api_register():
+    username = request.form.get('username') or (request.json or {}).get('username')
+    password = request.form.get('password') or (request.json or {}).get('password')
+    if not username or not password:
+        return jsonify({"status": "error", "msg": "用户名和密码必填"}), 400
+    if len(password) < 6:
+        return jsonify({"status": "error", "msg": "密码至少6位"}), 400
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    try:
+        c.execute("INSERT INTO users (username, password_hash) VALUES (?, ?)",
+                  (username, generate_password_hash(password)))
+        conn.commit()
+        user_id = c.lastrowid
+        user = User(user_id, username)
+        login_user(user)
+        return jsonify({"status": "success", "msg": "注册成功，已自动登录"})
+    except sqlite3.IntegrityError:
+        return jsonify({"status": "error", "msg": "用户名已存在"}), 400
+    finally:
+        conn.close()
+
+@app.route('/api/login', methods=['POST'])
+def api_login():
+    username = request.form.get('username') or (request.json or {}).get('username')
+    password = request.form.get('password') or (request.json or {}).get('password')
+    user = User.find_by_username(username)
+    if user:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("SELECT password_hash FROM users WHERE id=?", (user.id,))
+        row = c.fetchone()
+        conn.close()
+        if row and check_password_hash(row[0], password):
+            # 先保存当前会话（如果有）
+            if GLOBAL_DATA.get("data"):
+                save_global_data_store()
+            login_user(user)
+            # 加载该用户的专属数据
+            load_global_data_store()
+            return jsonify({"status": "success", "msg": "登录成功", "username": user.username})
+    return jsonify({"status": "error", "msg": "用户名或密码错误"}), 401
+
+@app.route('/api/logout', methods=['POST'])
+@login_required
+def api_logout():
+    if GLOBAL_DATA.get("data"):
+        save_global_data_store()
+    _clear_session_and_dashboard()
+    logout_user()
+    return jsonify({"status": "success", "msg": "已登出"})
+
+@app.route('/api/me', methods=['GET'])
+def api_me():
+    if current_user.is_authenticated:
+        return jsonify({"status": "success", "authenticated": True, "username": current_user.username})
+    return jsonify({"status": "success", "authenticated": False})
+
 @app.route('/upload', methods=['POST'])
+@login_required
 def upload_file():
     if 'file' not in request.files:
         return jsonify({"status": "error", "msg": "请选择文件"})
@@ -564,6 +802,7 @@ def upload_file():
 
 
 @app.route("/api/generate-demo-dataset", methods=["POST"])
+@login_required
 def api_generate_demo_dataset():
     """写入与 `generate_mock_data.py` / `TestData` 一致的内置主表及可选参考表，语义对齐上传后的会话。"""
     payload = request.get_json(silent=True) or {}
@@ -641,6 +880,7 @@ def api_generate_demo_dataset():
 
 
 @app.route("/upload-lookup", methods=["POST"])
+@login_required
 def upload_lookup():
     """上传关联参考表，存入 GLOBAL_DATA['lookup_data']（需已有主表）。"""
     if "data" not in GLOBAL_DATA:
@@ -696,6 +936,7 @@ def upload_lookup():
 
 
 @app.route("/apply-lookup", methods=["POST"])
+@login_required
 def apply_lookup():
     """左连接参考表，新增「计算结果」= 数量列 * 单价列，未匹配数值按 0 处理。"""
     if "data" not in GLOBAL_DATA:
@@ -808,6 +1049,7 @@ def clear_lookup():
 
 
 @app.route('/create-chart', methods=['POST'])
+@login_required
 def create_chart():
     data = request.json
     chart_type = data.get('type')
@@ -848,6 +1090,7 @@ def create_chart():
         return jsonify({"status": "error", "msg": f"生成图表失败：{str(e)}"})
 
 @app.route('/add-chart', methods=['POST'])
+@login_required
 def add_chart():
     global dashboard_state
 
@@ -919,6 +1162,7 @@ def get_dashboard():
 
 
 @app.route("/api/session-restore", methods=["GET"])
+@login_required
 def api_session_restore():
     """供前端首屏拉取：若磁盘上已恢复 GLOBAL_DATA，则返回与上传成功类似的载荷以便还原 UI。"""
     if "data" not in GLOBAL_DATA or not GLOBAL_DATA.get("data"):
@@ -957,6 +1201,7 @@ def api_session_restore():
 
 
 @app.route("/api/dashboard-metrics", methods=["POST"])
+@login_required
 def api_dashboard_metrics():
     """顶部 KPI + 省份/区域排行（与日期筛选、图表穿透筛选口径一致）。"""
     empty = {
@@ -1151,6 +1396,7 @@ def download_report():
 
 
 @app.route("/api/export", methods=["GET"])
+@login_required
 def api_export():
     """
     导出当前主表：使用 get_session_dataframe_full() 全量行，

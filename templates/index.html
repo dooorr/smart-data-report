@@ -188,6 +188,12 @@
 
         <!-- 主内容区 -->
         <main class="main-canvas" id="mainCanvas">
+            <!-- 用户信息栏：显示当前登录用户 + 退出按钮 -->
+            <div id="userBar" class="d-flex justify-content-end align-items-center px-3 py-2 border-bottom bg-light" style="display: none;">
+                <span id="welcomeText" class="me-3 text-muted small"></span>
+                <button type="button" class="btn btn-outline-danger btn-sm" onclick="logoutUser()">退出登录</button>
+            </div>
+
             <div class="header">
                 <div class="title-group">
                     <div class="title-icon">
@@ -660,5 +666,35 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" crossorigin="anonymous"></script>
     <script src="/static/js/drag.js"></script>
+
+    <!-- 用户认证相关脚本：调用 /api/me 显示欢迎语 + /api/logout 退出 -->
+    <script>
+        async function initUserBar() {
+            try {
+                const res = await fetch('/api/me');
+                const data = await res.json();
+                if (data.authenticated) {
+                    const bar = document.getElementById('userBar');
+                    const txt = document.getElementById('welcomeText');
+                    if (bar && txt) {
+                        txt.textContent = `欢迎，${data.username}`;
+                        bar.style.display = 'flex';
+                    }
+                }
+            } catch (e) {
+                console.warn('获取当前用户失败', e);
+            }
+        }
+
+        async function logoutUser() {
+            try {
+                await fetch('/api/logout', { method: 'POST' });
+            } catch (_) {}
+            window.location.reload();
+        }
+
+        // 页面加载后初始化用户栏
+        document.addEventListener('DOMContentLoaded', initUserBar);
+    </script>
 </body>
 </html>

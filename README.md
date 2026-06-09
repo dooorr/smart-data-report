@@ -56,13 +56,16 @@ pytest tests/ -v
 
 | 组件 | 说明 |
 |------|------|
-| Flask 3.x | Web 框架 |
+| Flask 3.x + Flask-Login | Web 框架 + 用户认证 |
 | flask-cors | 跨域支持 |
 | pandas / numpy | 数据处理 |
 | openpyxl | Excel 读写 |
 | plotly | 图表渲染（JSON 下发前端） |
 | Pillow | PNG 简易报表（`/download-report`）等 |
 | reportlab / matplotlib | PDF 等导出相关 |
+| SQLite + Werkzeug | 用户账号与密码哈希存储 |
+
+**本次升级亮点**：已从「单用户本地工具」升级为**多用户 SaaS 雏形**（Flask-Login + 每用户独立数据持久化），支持注册/登录/多用户数据隔离，首页自动跳转登录页。
 
 ---
 
