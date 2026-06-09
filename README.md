@@ -2,6 +2,8 @@
 
 基于 **Flask + pandas + Plotly** 的 Web 智能报表看板：上传 Excel/CSV、拖拽图表、会话持久化、多格式导出与简易数据质检。个人学习 / 作品集项目，侧重完整数据链路而非商业级多租户能力。
 
+**在线 Demo：** [dooorr.pythonanywhere.com](https://dooorr.pythonanywhere.com)（注册登录后即可体验；侧栏可一键生成演示数据）
+
 ![主看板概览](docs/thesis_figures/fig_4_2_dashboard_overview.png)
 
 ## 快速开始
@@ -28,7 +30,12 @@ pytest tests/ -v
 
 ### 公网部署（无需购买域名）
 
-平台会赠送免费 HTTPS 子域名（如 `xxx.onrender.com`）。完整步骤见 **[docs/DEPLOY.md](docs/DEPLOY.md)**（推荐 Render 免费套餐，约 10 分钟）。
+| 方式 | 需要银行卡？ | 文档 |
+|------|-------------|------|
+| **PythonAnywhere**（国内推荐） | ❌ 不需要 | **[docs/PYTHONANYWHERE.md](docs/PYTHONANYWHERE.md)** |
+| Render | ⚠️ 通常需要 Visa 验证 | [docs/DEPLOY.md](docs/DEPLOY.md) |
+
+不用买域名；平台会赠送免费 HTTPS 子域名。
 
 ---
 

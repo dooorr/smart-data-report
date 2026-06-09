@@ -1,0 +1,24 @@
+"""
+PythonAnywhere 用 WSGI 入口（复制内容到 Web 面板的 WSGI 配置文件）
+
+使用前把 YOUR_USERNAME 改成你的 PythonAnywhere 用户名。
+项目路径示例：/home/YOUR_USERNAME/smart-data-report
+"""
+
+import os
+import sys
+
+# ↓↓↓ 改成你的用户名和仓库目录名 ↓↓↓
+USERNAME = "YOUR_USERNAME"
+PROJECT_DIR = f"/home/{USERNAME}/smart-data-report"
+
+if PROJECT_DIR not in sys.path:
+    sys.path.insert(0, PROJECT_DIR)
+
+os.chdir(PROJECT_DIR)
+
+# 在 PythonAnywhere Web → Environment variables 里设置更安全；
+# 临时演示也可在这里写（勿提交真实密钥到 GitHub）
+os.environ.setdefault("FLASK_SECRET_KEY", "请在面板里设置环境变量")
+
+from app import app as application  # noqa: E402
