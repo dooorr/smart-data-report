@@ -23,8 +23,10 @@ from utils.chart_utils import (
 )
 from utils.session_export import (
     build_export_dataframe,
+    build_multi_sheet_excel_bytes,
+    build_summary_kpi_dataframe,
+    build_summary_ranking_dataframe,
     dataframe_to_csv_bytes,
-    dataframe_to_excel_bytes,
     dataframe_to_pdf_bytes,
     sanitize_export_basename,
 )
@@ -40,6 +42,7 @@ from utils.smart_table import (
 )
 from utils.anomaly_detector import detect_anomalies
 from utils.pressure_mock import build_lookup_dataframe, build_main_dataframe
+from utils import session_versions
 import random
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
@@ -404,24 +407,110 @@ def _sanitize_for_json(obj: Any) -> Any:
     return obj
 
 
+def build_global_data_store_payload() -> Dict[str, Any]:
+    """构建可持久化 / 快照的会话 payload。"""
+    save_data: Dict[str, Any] = {}
+    for key in _DATA_STORE_KEYS:
+        if key not in GLOBAL_DATA:
+            continue
+        value = GLOBAL_DATA[key]
+        if key in ("data", "lookup_data") and value is not None:
+            save_data[key] = _rows_for_json_dump(value)
+        else:
+            save_data[key] = copy.deepcopy(value)
+    save_data["dashboard_charts"] = copy.deepcopy(dashboard_state.get("charts", []))
+    save_data = _sanitize_for_json(save_data)
+    return clean_special_chars(save_data)
+
+
+def apply_global_data_store_payload(stored: dict) -> None:
+    """将磁盘 / 快照 payload 写回 GLOBAL_DATA 与 dashboard_state。"""
+    global dashboard_state
+    if not isinstance(stored, dict):
+        return
+    raw_stored = dict(stored)
+    charts = stored.get("dashboard_charts")
+    stored = clean_special_chars({k: v for k, v in stored.items() if k != "dashboard_charts"})
+    GLOBAL_DATA.clear()
+    for key in _DATA_STORE_KEYS:
+        if key in stored:
+            GLOBAL_DATA[key] = stored[key]
+    dashboard_state["charts"] = charts if isinstance(charts, list) else []
+    rows = GLOBAL_DATA.get("data")
+    if rows and isinstance(rows, list) and len(rows) > 0:
+        df = pd.DataFrame(rows)
+        if not df.empty:
+            has_persisted_mapping = all(
+                k in raw_stored for k in ("mapped_date_col", "mapped_value_col", "mapped_dim_col")
+            )
+            if not has_persisted_mapping:
+                sync_global_column_mapping(df)
+
+
+def auto_snapshot_session(label: str, reason: str = "auto") -> Optional[dict]:
+    """在有主表数据时自动写入版本快照（需登录）。"""
+    try:
+        if not current_user.is_authenticated:
+            return None
+        payload = build_global_data_store_payload()
+        if not payload.get("data"):
+            return None
+        return session_versions.create_snapshot(
+            current_user.id,
+            USER_DATA_DIR,
+            payload,
+            label=label,
+            reason=reason,
+        )
+    except Exception as e:
+        print(f"[WARN] 自动快照失败: {e}")
+        return None
+
+
+def build_session_restore_response() -> Dict[str, Any]:
+    """与上传成功 / session-restore 一致的前端恢复载荷。"""
+    if "data" not in GLOBAL_DATA or not GLOBAL_DATA.get("data"):
+        return {"status": "success", "has_data": False}
+    df_full = get_session_dataframe_full()
+    if df_full is None or df_full.empty:
+        return {"status": "success", "has_data": False}
+    sugg = infer_bi_metrics_columns(df_full)
+    raw_data_html = generate_raw_data_table(df_full, GLOBAL_DATA.get("mapped_columns"))
+    out: Dict[str, Any] = {
+        "status": "success",
+        "has_data": True,
+        "all_columns": get_all_columns(df_full),
+        "numeric_columns": get_numeric_columns(df_full),
+        "raw_data_html": raw_data_html,
+        "filename": GLOBAL_DATA.get("filename"),
+        "filesize": GLOBAL_DATA.get("filesize"),
+        "data_source": GLOBAL_DATA.get("data_source"),
+        "mapped_columns": GLOBAL_DATA.get("mapped_columns") or [],
+        "column_mapping_suggestion": {
+            "mapped_date_col": GLOBAL_DATA.get("mapped_date_col") or sugg["date_col"],
+            "mapped_value_col": GLOBAL_DATA.get("mapped_value_col") or sugg["sales_col"],
+            "mapped_dim_col": GLOBAL_DATA.get("mapped_dim_col") or sugg["region_col"],
+        },
+    }
+    if GLOBAL_DATA.get("lookup_data"):
+        try:
+            lk = pd.DataFrame(GLOBAL_DATA["lookup_data"])
+            if not lk.empty:
+                out["lookup_all_columns"] = get_all_columns(lk)
+                out["lookup_numeric_columns"] = get_numeric_columns(lk)
+                out["lookup_filename"] = GLOBAL_DATA.get("lookup_filename")
+        except Exception:
+            pass
+    return out
+
+
 def save_global_data_store():
     """将 GLOBAL_DATA 与仪表盘图表列表写入当前用户的独立 JSON 文件。未登录时跳过保存。"""
     user_file = get_current_user_data_file()
     if not user_file:
         return
     try:
-        save_data: Dict[str, Any] = {}
-        for key in _DATA_STORE_KEYS:
-            if key not in GLOBAL_DATA:
-                continue
-            value = GLOBAL_DATA[key]
-            if key in ("data", "lookup_data") and value is not None:
-                save_data[key] = _rows_for_json_dump(value)
-            else:
-                save_data[key] = copy.deepcopy(value)
-        save_data["dashboard_charts"] = copy.deepcopy(dashboard_state.get("charts", []))
-        save_data = _sanitize_for_json(save_data)
-        save_data = clean_special_chars(save_data)
+        save_data = build_global_data_store_payload()
         _save_user_data_store(user_file, save_data)
         print(f"[INFO] 已保存到用户数据文件: {os.path.basename(user_file)}")
     except Exception as e:
@@ -433,35 +522,13 @@ def load_global_data_store():
     """登录后加载当前用户的独立数据文件。启动时无用户登录则跳过。"""
     user_file = get_current_user_data_file()
     if not user_file or not os.path.isfile(user_file):
-        # 启动时或未登录：不清空 GLOBAL_DATA，保持干净状态
         return
     try:
         with open(user_file, "r", encoding="utf-8") as f:
             stored = json.load(f)
-        if not isinstance(stored, dict):
-            return
-        charts = stored.pop("dashboard_charts", None)
-        raw_stored = dict(stored)
-        stored = clean_special_chars(stored)
-        GLOBAL_DATA.clear()
-        for key in _DATA_STORE_KEYS:
-            if key in stored:
-                GLOBAL_DATA[key] = stored[key]
-        if isinstance(charts, list):
-            dashboard_state["charts"] = charts
-        else:
-            dashboard_state["charts"] = []
+        apply_global_data_store_payload(stored)
         fn = GLOBAL_DATA.get("filename")
         print(f"[INFO] 已从用户文件恢复: {os.path.basename(user_file)}，文件: {fn!r}")
-        rows = GLOBAL_DATA.get("data")
-        if rows and isinstance(rows, list) and len(rows) > 0:
-            df = pd.DataFrame(rows)
-            if not df.empty:
-                has_persisted_mapping = all(
-                    k in raw_stored for k in ("mapped_date_col", "mapped_value_col", "mapped_dim_col")
-                )
-                if not has_persisted_mapping:
-                    sync_global_column_mapping(df)
     except Exception as e:
         print(f"[ERROR] 加载用户数据失败: {e}")
         traceback.print_exc()
@@ -584,6 +651,8 @@ def resolve_insight_x_column(df: pd.DataFrame, x_col: str):
 def _clear_session_and_dashboard():
     """清空 GLOBAL_DATA 中的主表/参考表、会话中的画布布局与服务端仪表盘。"""
     global dashboard_state
+    if GLOBAL_DATA.get("data"):
+        auto_snapshot_session("清空前自动备份", reason="pre_clear")
     dashboard_state["charts"] = []
     GLOBAL_DATA.clear()
     session.pop("chart_layout", None)
@@ -797,6 +866,7 @@ def upload_file():
         sugg = infer_bi_metrics_columns(df)
 
         save_global_data_store()
+        auto_snapshot_session(f"上传: {file.filename}", reason="upload")
         return jsonify({
             "status": "success",
             "all_columns": all_cols,
@@ -873,6 +943,7 @@ def api_generate_demo_dataset():
     sugg = infer_bi_metrics_columns(df)
 
     save_global_data_store()
+    auto_snapshot_session(f"演示数据 {n_rows} 行", reason="demo")
 
     resp: Dict[str, Any] = {
         "status": "success",
@@ -936,6 +1007,7 @@ def upload_lookup():
         num_cols = get_numeric_columns(df)
 
         save_global_data_store()
+        auto_snapshot_session(f"参考表: {file.filename}", reason="lookup_upload")
         return jsonify(
             {
                 "status": "success",
@@ -1041,6 +1113,7 @@ def apply_lookup():
         num_cols = get_numeric_columns(merged)
 
         save_global_data_store()
+        auto_snapshot_session("应用 VLOOKUP 关联", reason="vlookup")
         return jsonify(
             {
                 "status": "success",
@@ -1183,39 +1256,71 @@ def get_dashboard():
 @login_required
 def api_session_restore():
     """供前端首屏拉取：若磁盘上已恢复 GLOBAL_DATA，则返回与上传成功类似的载荷以便还原 UI。"""
+    return jsonify(build_session_restore_response())
+
+
+@app.route("/api/snapshots", methods=["GET"])
+@login_required
+def api_list_snapshots():
+    items = session_versions.list_snapshots(current_user.id, USER_DATA_DIR)
+    return jsonify({"status": "success", "snapshots": items, "max": session_versions.MAX_SNAPSHOTS})
+
+
+@app.route("/api/snapshots", methods=["POST"])
+@login_required
+def api_create_snapshot():
     if "data" not in GLOBAL_DATA or not GLOBAL_DATA.get("data"):
-        return jsonify({"status": "success", "has_data": False})
-    df_full = get_session_dataframe_full()
-    if df_full is None or df_full.empty:
-        return jsonify({"status": "success", "has_data": False})
-    sugg = infer_bi_metrics_columns(df_full)
-    raw_data_html = generate_raw_data_table(df_full, GLOBAL_DATA.get("mapped_columns"))
-    out: Dict[str, Any] = {
-        "status": "success",
-        "has_data": True,
-        "all_columns": get_all_columns(df_full),
-        "numeric_columns": get_numeric_columns(df_full),
-        "raw_data_html": raw_data_html,
-        "filename": GLOBAL_DATA.get("filename"),
-        "filesize": GLOBAL_DATA.get("filesize"),
-        "data_source": GLOBAL_DATA.get("data_source"),
-        "mapped_columns": GLOBAL_DATA.get("mapped_columns") or [],
-        "column_mapping_suggestion": {
-            "mapped_date_col": GLOBAL_DATA.get("mapped_date_col") or sugg["date_col"],
-            "mapped_value_col": GLOBAL_DATA.get("mapped_value_col") or sugg["sales_col"],
-            "mapped_dim_col": GLOBAL_DATA.get("mapped_dim_col") or sugg["region_col"],
-        },
-    }
-    if GLOBAL_DATA.get("lookup_data"):
-        try:
-            lk = pd.DataFrame(GLOBAL_DATA["lookup_data"])
-            if not lk.empty:
-                out["lookup_all_columns"] = get_all_columns(lk)
-                out["lookup_numeric_columns"] = get_numeric_columns(lk)
-                out["lookup_filename"] = GLOBAL_DATA.get("lookup_filename")
-        except Exception:
-            pass
-    return jsonify(out)
+        return jsonify({"status": "error", "msg": "请先上传或载入数据"}), 400
+    payload = request.get_json(silent=True) or {}
+    label = str(payload.get("label") or "手动快照").strip() or "手动快照"
+    try:
+        meta = session_versions.create_snapshot(
+            current_user.id,
+            USER_DATA_DIR,
+            build_global_data_store_payload(),
+            label=label,
+            reason="manual",
+        )
+        return jsonify({"status": "success", "snapshot": meta})
+    except ValueError as e:
+        return jsonify({"status": "error", "msg": str(e)}), 400
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"status": "error", "msg": f"保存快照失败：{e}"}), 500
+
+
+@app.route("/api/snapshots/<snapshot_id>/restore", methods=["POST"])
+@login_required
+def api_restore_snapshot(snapshot_id):
+    if GLOBAL_DATA.get("data"):
+        auto_snapshot_session("恢复前自动备份", reason="pre_restore")
+    try:
+        stored = session_versions.load_snapshot_payload(
+            current_user.id, USER_DATA_DIR, snapshot_id
+        )
+        apply_global_data_store_payload(stored)
+        save_global_data_store()
+        out = build_session_restore_response()
+        out["msg"] = f"已恢复到快照 {snapshot_id}"
+        out["restored_snapshot_id"] = snapshot_id
+        return jsonify(out)
+    except FileNotFoundError:
+        return jsonify({"status": "error", "msg": "快照不存在"}), 404
+    except ValueError as e:
+        return jsonify({"status": "error", "msg": str(e)}), 400
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"status": "error", "msg": f"恢复失败：{e}"}), 500
+
+
+@app.route("/api/snapshots/<snapshot_id>", methods=["DELETE"])
+@login_required
+def api_delete_snapshot(snapshot_id):
+    try:
+        session_versions.delete_snapshot(current_user.id, USER_DATA_DIR, snapshot_id)
+        return jsonify({"status": "success", "msg": "已删除快照"})
+    except ValueError as e:
+        return jsonify({"status": "error", "msg": str(e)}), 400
 
 
 @app.route("/api/dashboard-metrics", methods=["POST"])
@@ -1418,8 +1523,8 @@ def download_report():
 def api_export():
     """
     导出当前主表：使用 get_session_dataframe_full() 全量行，
-    按 GLOBAL_DATA['mapped_columns'] 的显隐与顺序筛选/重排，
-    日期/数值/维度三列使用「日期」「数值」「维度」表头（或单项 display_name）。
+    按 GLOBAL_DATA['mapped_columns'] 的显隐与顺序筛选/重排。
+    Excel 格式输出多 Sheet：数据 + 参考表（若有）+ 汇总 KPI/排行。
     """
     fmt = (request.args.get("format") or "excel").lower()
     if fmt == "xlsx":
@@ -1450,12 +1555,40 @@ def api_export():
 
     try:
         if fmt == "excel":
-            payload = dataframe_to_excel_bytes(df_out)
+            lookup_df = None
+            if GLOBAL_DATA.get("lookup_data"):
+                try:
+                    lookup_df = pd.DataFrame(GLOBAL_DATA["lookup_data"])
+                    if lookup_df.empty:
+                        lookup_df = None
+                except Exception:
+                    lookup_df = None
+
+            metrics = compute_bi_dashboard_metrics(
+                df_full,
+                date_col=GLOBAL_DATA.get("mapped_date_col"),
+                sales_col=GLOBAL_DATA.get("mapped_value_col"),
+                region_col=GLOBAL_DATA.get("mapped_dim_col"),
+            )
+            summary_kpi = build_summary_kpi_dataframe(
+                filename=GLOBAL_DATA.get("filename"),
+                lookup_filename=GLOBAL_DATA.get("lookup_filename"),
+                row_count=len(df_full),
+                metrics=metrics,
+            )
+            summary_ranking = build_summary_ranking_dataframe(metrics)
+
+            payload = build_multi_sheet_excel_bytes(
+                df_out,
+                lookup_df=lookup_df,
+                summary_kpi=summary_kpi,
+                summary_ranking=summary_ranking,
+            )
             return send_file(
                 io.BytesIO(payload),
                 mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 as_attachment=True,
-                download_name=f"{base}_数据.xlsx",
+                download_name=f"{base}_报表.xlsx",
             )
         if fmt == "csv":
             payload = dataframe_to_csv_bytes(df_out)

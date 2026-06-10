@@ -2050,6 +2050,131 @@ function applyLoadedDataset({
         applyReportModuleVisibility();
     });
     syncExportCenterUi();
+    void refreshSnapshotList();
+}
+
+function applySessionRestorePayload(data, msgOverride) {
+    if (!data || data.status !== "success" || !data.has_data) return false;
+
+    if (Array.isArray(data.lookup_all_columns) && data.lookup_all_columns.length) {
+        lookupAllColumns = data.lookup_all_columns;
+        lookupNumericColumns = Array.isArray(data.lookup_numeric_columns)
+            ? data.lookup_numeric_columns
+            : [];
+    }
+
+    applyLoadedDataset({
+        all_columns: data.all_columns,
+        numeric_columns: data.numeric_columns,
+        filename: data.filename,
+        filesize: data.filesize,
+        raw_data_html: data.raw_data_html,
+        mapped_columns: data.mapped_columns,
+        msg: msgOverride || data.msg || "已从服务端恢复会话",
+        clearCanvas: false,
+        resetLookup: !(data.lookup_all_columns && data.lookup_all_columns.length),
+        skipDashboardMetrics: false
+    });
+
+    if (data.lookup_all_columns && data.lookup_all_columns.length) {
+        populateVlookupLookupSelects(lookupAllColumns, lookupNumericColumns);
+        populateVlookupMainSelects();
+        const box = document.getElementById("lookupUploadBox");
+        const card = document.getElementById("lookupFileCard");
+        const nameEl = document.getElementById("lookupFileName");
+        if (box) box.style.display = "none";
+        if (card) card.style.display = "flex";
+        if (nameEl) nameEl.innerText = data.lookup_filename || "参考表";
+    }
+
+    const tip = document.getElementById("statusTip");
+    if (tip) tip.style.color = "#10b981";
+    void loadDashboard();
+    return true;
+}
+
+async function refreshSnapshotList() {
+    const listEl = document.getElementById("snapshotList");
+    if (!listEl) return;
+    try {
+        const res = await fetch("/api/snapshots");
+        if (res.status === 401 || res.redirected) {
+            listEl.innerHTML = '<li class="snapshot-empty">请先登录</li>';
+            return;
+        }
+        const data = await res.json();
+        const items = Array.isArray(data.snapshots) ? data.snapshots : [];
+        if (!items.length) {
+            listEl.innerHTML = '<li class="snapshot-empty">暂无快照，上传数据后会自动生成</li>';
+            return;
+        }
+        listEl.innerHTML = items
+            .map((item) => {
+                const sub = [
+                    item.created_at ? String(item.created_at).replace("T", " ") : "",
+                    item.row_count != null ? `${item.row_count} 行` : "",
+                    item.has_lookup ? "含参考表" : "",
+                ]
+                    .filter(Boolean)
+                    .join(" · ");
+                return `<li class="snapshot-item">
+  <div class="snapshot-item-meta">
+    <div class="snapshot-item-title">${escapeHtmlForUi(item.label || item.id)}</div>
+    <div class="snapshot-item-sub">${escapeHtmlForUi(sub)}</div>
+  </div>
+  <button type="button" class="snapshot-restore-btn" data-snapshot-id="${escapeHtmlForUi(item.id)}">恢复</button>
+</li>`;
+            })
+            .join("");
+        listEl.querySelectorAll(".snapshot-restore-btn").forEach((btn) => {
+            btn.addEventListener("click", () => restoreSnapshot(btn.getAttribute("data-snapshot-id")));
+        });
+    } catch (e) {
+        console.warn("[refreshSnapshotList]", e);
+        listEl.innerHTML = '<li class="snapshot-empty">加载失败</li>';
+    }
+}
+
+async function saveManualSnapshot() {
+    const label = window.prompt("快照名称（可选）", "手动快照");
+    if (label === null) return;
+    try {
+        const res = await fetch("/api/snapshots", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ label: label.trim() || "手动快照" }),
+        });
+        const data = await res.json();
+        if (data.status !== "success") {
+            alert(data.msg || "保存失败");
+            return;
+        }
+        await refreshSnapshotList();
+        alert("快照已保存");
+    } catch (e) {
+        console.error(e);
+        alert("网络错误，保存失败");
+    }
+}
+
+async function restoreSnapshot(snapshotId) {
+    if (!snapshotId) return;
+    if (!window.confirm(`确定恢复到快照 ${snapshotId} 吗？当前数据会先自动备份。`)) return;
+    try {
+        const res = await fetch(`/api/snapshots/${encodeURIComponent(snapshotId)}/restore`, {
+            method: "POST",
+        });
+        const data = await res.json();
+        if (data.status !== "success" || !data.has_data) {
+            alert(data.msg || "恢复失败");
+            return;
+        }
+        applySessionRestorePayload(data, data.msg || "已恢复快照");
+        await refreshSnapshotList();
+    } catch (e) {
+        console.error(e);
+        alert("网络错误，恢复失败");
+    }
 }
 
 /**
@@ -2060,41 +2185,11 @@ async function restorePersistedSession() {
     try {
         const res = await fetch("/api/session-restore");
         const data = await res.json();
-        if (data.status !== "success" || !data.has_data) return;
-
-        if (Array.isArray(data.lookup_all_columns) && data.lookup_all_columns.length) {
-            lookupAllColumns = data.lookup_all_columns;
-            lookupNumericColumns = Array.isArray(data.lookup_numeric_columns)
-                ? data.lookup_numeric_columns
-                : [];
+        if (applySessionRestorePayload(data)) {
+            await refreshSnapshotList();
+        } else {
+            await refreshSnapshotList();
         }
-
-        applyLoadedDataset({
-            all_columns: data.all_columns,
-            numeric_columns: data.numeric_columns,
-            filename: data.filename,
-            filesize: data.filesize,
-            raw_data_html: data.raw_data_html,
-            mapped_columns: data.mapped_columns,
-            msg: "已从服务端恢复会话",
-            clearCanvas: false,
-            resetLookup: !(data.lookup_all_columns && data.lookup_all_columns.length),
-            skipDashboardMetrics: false
-        });
-
-        if (data.lookup_all_columns && data.lookup_all_columns.length) {
-            populateVlookupLookupSelects(lookupAllColumns, lookupNumericColumns);
-            populateVlookupMainSelects();
-            const box = document.getElementById("lookupUploadBox");
-            const card = document.getElementById("lookupFileCard");
-            const nameEl = document.getElementById("lookupFileName");
-            if (box) box.style.display = "none";
-            if (card) card.style.display = "flex";
-            if (nameEl) nameEl.innerText = data.lookup_filename || "参考表";
-        }
-
-        const tip = document.getElementById("statusTip");
-        if (tip) tip.style.color = "#10b981";
     } catch (e) {
         console.warn("[restorePersistedSession]", e);
     }

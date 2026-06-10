@@ -18,9 +18,12 @@ def app_module(tmp_path, monkeypatch):
     data_dir.mkdir(parents=True, exist_ok=True)
     upload_dir.mkdir(parents=True, exist_ok=True)
     store_file = data_dir / "data_store.json"
+    users_db = tmp_path / "users.db"
 
     monkeypatch.setattr(app_module, "DATA_STORE_DIR", str(data_dir))
     monkeypatch.setattr(app_module, "DATA_STORE_FILE", str(store_file))
+    monkeypatch.setattr(app_module, "DB_PATH", str(users_db))
+    app_module.init_user_db()
     app_module.app.config["UPLOAD_FOLDER"] = str(upload_dir)
     app_module.app.config["TESTING"] = True
 
@@ -45,4 +48,16 @@ def load_demo(client, n_rows=50, seed=42):
     return client.post(
         "/api/generate-demo-dataset",
         json={"n_rows": n_rows, "seed": seed, "include_lookup": True},
+    )
+
+
+def login_test_user(client, username="pytest_user", password="pytest1"):
+    """注册并登录测试用户（需已配置 TESTING）。"""
+    client.post(
+        "/api/register",
+        json={"username": username, "password": password},
+    )
+    return client.post(
+        "/api/login",
+        json={"username": username, "password": password},
     )

@@ -135,6 +135,67 @@ body {
     border-color: #ea580c;
     background: #ffedd5;
 }
+.snapshot-section {
+    margin-top: 16px;
+    padding-top: 12px;
+    border-top: 1px solid #e5e7eb;
+}
+.snapshot-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+.snapshot-refresh-btn {
+    padding: 6px 12px;
+    font-size: 12px;
+}
+.snapshot-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    max-height: 220px;
+    overflow-y: auto;
+}
+.snapshot-item {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 8px 0;
+    border-bottom: 1px dashed #e5e7eb;
+    font-size: 12px;
+}
+.snapshot-item-meta {
+    flex: 1;
+    min-width: 0;
+}
+.snapshot-item-title {
+    font-weight: 600;
+    word-break: break-all;
+}
+.snapshot-item-sub {
+    color: #6b7280;
+    margin-top: 2px;
+}
+.snapshot-restore-btn {
+    flex-shrink: 0;
+    padding: 4px 10px;
+    font-size: 12px;
+    border: 1px solid #4472c4;
+    background: #fff;
+    color: #4472c4;
+    border-radius: 4px;
+    cursor: pointer;
+}
+.snapshot-restore-btn:hover {
+    background: #eff6ff;
+}
+.snapshot-empty {
+    color: #9ca3af;
+    font-size: 12px;
+    padding: 8px 0;
+}
 .upload-btn {
     display: inline-flex;
     align-items: center;

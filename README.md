@@ -346,6 +346,22 @@ gunicorn -b 0.0.0.0:8000 app:app
 
 **部署提示。** 若将应用暴露于公网，该接口可能被滥用以刷写内存与磁盘；生产环境宜加鉴权、限流或仅在内网/演示环境启用。
 
+### 7.6 版本历史（快照）
+
+侧栏 **「版本历史」** 会在以下操作后**自动保存快照**（每用户最多 **20** 条，存于 `data/users/user_{id}/snapshots/`）：
+
+- 上传主表、生成演示数据、上传参考表、应用 VLOOKUP
+- 清空数据前会自动备份一条「清空前自动备份」
+
+支持 **手动保存当前快照**、列表查看与 **一键恢复**；恢复前会先自动备份当前状态（「恢复前自动备份」）。
+
+| 接口 | 方法 | 说明 |
+|------|------|------|
+| `/api/snapshots` | GET | 列出快照 |
+| `/api/snapshots` | POST | 手动保存（JSON：`{"label":"..."}`） |
+| `/api/snapshots/<id>/restore` | POST | 恢复到指定版本 |
+| `/api/snapshots/<id>` | DELETE | 删除快照 |
+
 ---
 
 ## 8. 主要 HTTP 接口一览
@@ -373,7 +389,10 @@ gunicorn -b 0.0.0.0:8000 app:app
 | `/update-layout` | POST | 更新图表布局位置 |
 | `/toggle-theme` | POST | 切换主题 |
 | `/download-report` | GET | 下载简易 PNG 报表（依赖 Pillow，已列入 `requirements.txt`） |
-| `/api/export` | GET | 导出主表（`format=excel|pdf|csv`） |
+| `/api/export` | GET | 导出 Excel（**多 Sheet**：数据 + 参考表 + 汇总 KPI/排行）/ PDF / CSV（`format=excel|pdf|csv`） |
+| `/api/snapshots` | GET/POST | 版本快照列表 / 手动保存 |
+| `/api/snapshots/<id>/restore` | POST | 恢复快照 |
+| `/api/snapshots/<id>` | DELETE | 删除快照 |
 | `/save-layout` | POST | 保存布局到 Session |
 | `/get-layout` | GET | 读取布局 |
 | `/balance-sheet` | GET | 资产负债表页面 |

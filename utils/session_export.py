@@ -117,14 +117,10 @@ def build_export_dataframe(
 # ---- Excel ----
 
 
-def dataframe_to_excel_bytes(df: pd.DataFrame) -> bytes:
-    from openpyxl import Workbook
+def _write_dataframe_to_worksheet(ws, df: pd.DataFrame, *, start_row: int = 1) -> int:
+    """写入表头与数据，返回最后一行行号。"""
     from openpyxl.styles import Alignment, Font, PatternFill
     from openpyxl.utils import get_column_letter
-
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "数据"
 
     header_font = Font(bold=True, color="FFFFFF", size=11)
     header_fill = PatternFill(fill_type="solid", fgColor="4472C4")
@@ -132,29 +128,134 @@ def dataframe_to_excel_bytes(df: pd.DataFrame) -> bytes:
     body_align = Alignment(vertical="top", wrap_text=True)
 
     ncols = len(df.columns)
+    header_row = start_row
     for j, h in enumerate(df.columns, start=1):
-        cell = ws.cell(1, j, str(h))
+        cell = ws.cell(header_row, j, str(h))
         cell.font = header_font
         cell.fill = header_fill
         cell.alignment = header_align
 
-    for i, row in enumerate(df.itertuples(index=False), start=2):
+    data_start = header_row + 1
+    for i, row in enumerate(df.itertuples(index=False), start=data_start):
         for j, val in enumerate(row, start=1):
             cell = ws.cell(i, j, val)
             cell.alignment = body_align
 
+    last_row = data_start + len(df) - 1 if len(df) else header_row
     for j in range(1, ncols + 1):
         letter = get_column_letter(j)
-        max_len = len(str(ws.cell(1, j).value))
-        for i in range(2, ws.max_row + 1):
+        max_len = len(str(ws.cell(header_row, j).value))
+        for i in range(data_start, last_row + 1):
             v = ws.cell(i, j).value
             if v is not None:
                 max_len = max(max_len, len(str(v)))
         ws.column_dimensions[letter].width = min(max(max_len + 2, 10), 48)
 
+    return last_row
+
+
+def build_summary_kpi_dataframe(
+    *,
+    filename: Optional[str],
+    lookup_filename: Optional[str],
+    row_count: int,
+    metrics: Dict[str, Any],
+) -> pd.DataFrame:
+    """汇总 Sheet 上半部分：导出信息与 KPI。"""
+    from datetime import datetime
+
+    mom = metrics.get("mom_growth_pct")
+    if mom is not None:
+        try:
+            mom_text = f"{float(mom):.2f}%"
+        except (TypeError, ValueError):
+            mom_text = "—"
+    else:
+        mom_text = "—"
+
+    total_sales = metrics.get("total_sales", 0)
+    try:
+        sales_text = f"{float(total_sales):,.2f}"
+    except (TypeError, ValueError):
+        sales_text = str(total_sales)
+
+    rows: List[Tuple[str, Any]] = [
+        ("导出时间", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+        ("主表文件", filename or "—"),
+        ("主表行数", int(row_count)),
+        ("总销售额", sales_text),
+        ("环比增长", mom_text),
+        ("订单总数", metrics.get("order_count", 0)),
+        ("预警项数", metrics.get("warning_count", 0)),
+    ]
+    if lookup_filename:
+        rows.insert(2, ("参考表文件", lookup_filename))
+
+    meta = metrics.get("meta") or {}
+    if meta.get("date_col"):
+        rows.append(("日期字段", meta["date_col"]))
+    if meta.get("sales_col"):
+        rows.append(("数值字段", meta["sales_col"]))
+    if meta.get("region_col"):
+        rows.append(("维度字段", meta["region_col"]))
+
+    return pd.DataFrame(rows, columns=["指标", "数值"])
+
+
+def build_summary_ranking_dataframe(metrics: Dict[str, Any]) -> pd.DataFrame:
+    """汇总 Sheet 下半部分：区域/维度排行。"""
+    ranking = metrics.get("province_ranking") or []
+    if not ranking:
+        return pd.DataFrame(columns=["区域", "销售额"])
+    return pd.DataFrame(
+        [{"区域": str(r.get("name", "")), "销售额": float(r.get("sales", 0))} for r in ranking]
+    )
+
+
+def build_multi_sheet_excel_bytes(
+    main_df: pd.DataFrame,
+    *,
+    lookup_df: Optional[pd.DataFrame] = None,
+    summary_kpi: Optional[pd.DataFrame] = None,
+    summary_ranking: Optional[pd.DataFrame] = None,
+) -> bytes:
+    """
+    多 Sheet Excel：数据（必选）+ 参考表（可选）+ 汇总（可选）。
+    """
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws_data = wb.active
+    ws_data.title = "数据"
+    _write_dataframe_to_worksheet(ws_data, main_df)
+
+    if lookup_df is not None and not lookup_df.empty:
+        ws_lookup = wb.create_sheet("参考表")
+        _write_dataframe_to_worksheet(ws_lookup, lookup_df)
+
+    has_summary = (
+        (summary_kpi is not None and not summary_kpi.empty)
+        or (summary_ranking is not None and not summary_ranking.empty)
+    )
+    if has_summary:
+        ws_sum = wb.create_sheet("汇总")
+        next_row = 1
+        if summary_kpi is not None and not summary_kpi.empty:
+            next_row = _write_dataframe_to_worksheet(ws_sum, summary_kpi, start_row=next_row)
+        if summary_ranking is not None and not summary_ranking.empty:
+            gap = 2 if next_row > 1 else 0
+            _write_dataframe_to_worksheet(
+                ws_sum, summary_ranking, start_row=next_row + gap
+            )
+
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+def dataframe_to_excel_bytes(df: pd.DataFrame) -> bytes:
+    """单 Sheet 导出（兼容旧调用）。"""
+    return build_multi_sheet_excel_bytes(df)
 
 
 # ---- PDF（reportlab）----

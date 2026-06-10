@@ -1,7 +1,7 @@
 """Smart Data Report 核心 API 自动化测试（pytest + Flask test_client）。"""
 import io
 
-from conftest import load_demo
+from conftest import load_demo, login_test_user
 
 
 class TestHealthAndSession:
@@ -132,12 +132,32 @@ class TestTemplatesAndExport:
         assert len(data["templates"]) >= 1
 
     def test_export_csv_requires_data(self, client):
+        login_test_user(client)
+        client.post("/api/clear-session")
         resp = client.get("/api/export?format=csv")
         assert resp.status_code == 400
         assert resp.get_json()["status"] == "error"
 
     def test_export_csv_with_data(self, client):
+        login_test_user(client)
         load_demo(client, n_rows=20)
         resp = client.get("/api/export?format=csv")
         assert resp.status_code == 200
         assert "text/csv" in resp.content_type or resp.data
+
+    def test_export_excel_multi_sheet(self, client):
+        login_test_user(client)
+        load_demo(client, n_rows=30)
+        resp = client.get("/api/export?format=excel")
+        assert resp.status_code == 200
+        assert "spreadsheetml" in resp.content_type
+
+        from openpyxl import load_workbook
+
+        wb = load_workbook(io.BytesIO(resp.data))
+        assert "数据" in wb.sheetnames
+        assert "参考表" in wb.sheetnames
+        assert "汇总" in wb.sheetnames
+        assert wb["数据"].max_row >= 2
+        assert wb["参考表"].max_row >= 2
+        assert wb["汇总"]["A1"].value == "指标"

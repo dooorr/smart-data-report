@@ -56,6 +56,15 @@
                         <p class="upload-desc">无本地文件时，可一键生成与 <code>TestData</code> 脚本一致的主表（及参考表），便于联调 VLOOKUP；仍可随时用上方 Upload 上传自有数据。</p>
                         <button type="button" class="btn-template-sample" id="btnGenerateDemoData" onclick="generateDemoDataset()">生成内置测试数据</button>
                     </div>
+                    <div class="snapshot-section" id="snapshotSection">
+                        <h3>版本历史</h3>
+                        <p class="upload-desc">上传、演示数据或 VLOOKUP 后会自动保存快照（最多 20 条），可恢复到任意历史版本。</p>
+                        <div class="snapshot-actions">
+                            <button type="button" class="btn-template-sample" id="btnSaveSnapshot" onclick="saveManualSnapshot()">保存当前快照</button>
+                            <button type="button" class="btn-clear-session snapshot-refresh-btn" onclick="refreshSnapshotList()">刷新列表</button>
+                        </div>
+                        <ul class="snapshot-list" id="snapshotList" aria-live="polite"></ul>
+                    </div>
                     <div class="dashboard-kpi-pref-section">
                         <h3>看板</h3>
                         <label class="dashboard-kpi-pref-label" for="chkShowKpiWhenEmpty">
